@@ -111,7 +111,7 @@ class Eqns:
     def __init__(self, jaxpr):
         # var -> eqn idx
         self.source = {}
-        # eqn -> set of (eqn idx, var)s
+        # eqn idx -> set of (eqn idx, var)s
         self.influenced = {}
         self.eqns = [_ for _ in jaxpr.eqns]
 
@@ -131,20 +131,35 @@ class Eqns:
                         self.influenced[source] = set()
                     self.influenced[source].add((i, var))
 
-    def eqns_without(self, eqns, stop_vars):
-        affected = set(eqns)
-        frontier = [_ for _ in eqns]
-        changed = True
+    def eqns_without(self, eqn_idxs, stop_vars):
+        affected = set(eqn_idxs)
+        frontier = [_ for _ in eqn_idxs]
+
+        after_stop_affected = set()
+        after_stop_frontier = []
 
         # A good old worklist algorithm to remove things downstream of our equations
         for start in frontier:
             if start in self.influenced:
                 for (end, var) in self.influenced[start]:
-                    if end not in affected and var not in stop_vars:
-                        affected.add(end)
-                        frontier.append(end)
+                    if end not in affected | after_stop_affected:
+                        if var in stop_vars:
+                            after_stop_affected.add(end)
+                            after_stop_frontier.append(end)
+                        else:
+                            affected.add(end)
+                            frontier.append(end)
 
-        return [eqn for i, eqn in enumerate(self.eqns) if i not in affected], affected
+        for start in after_stop_frontier:
+            if start in self.influenced:
+                for (end, var) in self.influenced[start]:
+                    if end not in affected | after_stop_affected:
+                        after_stop_affected.add(end)
+                        after_stop_frontier.append(end)
+
+        return [eqn for i, eqn in enumerate(self.eqns) if i not in affected | after_stop_affected], \
+               [eqn for i, eqn in enumerate(self.eqns) if i in after_stop_affected], \
+               affected
 
 
 def matches(eqn_tup, name):
@@ -187,7 +202,7 @@ def maybe_peephole_logsumexp_trick(ir):
 
     # Double-check that no intermediate variables are used by something else
     eqns = Eqns(ir)
-    new_eqns, removed = eqns.eqns_without([log[0], sm[0], exp[0]], output_vars)
+    before_eqns, after_eqns, removed = eqns.eqns_without([log[0], sm[0], exp[0]], output_vars)
     if len(removed) != 3:
         # intermediate steps were used, so can't do optimization
         return None
@@ -205,7 +220,8 @@ def maybe_peephole_logsumexp_trick(ir):
         output_vars
     )
 
-    new_eqns += [max_eqn, sub_eqn, exp_eqn, sum_eqn, log_eqn, add_eqn]
+    peephole_improvement = [max_eqn, sub_eqn, exp_eqn, sum_eqn, log_eqn, add_eqn]
+    new_eqns = before_eqns + peephole_improvement + after_eqns
 
     return replace_closed_jaxpr_eqns(ir, new_eqns)
 
