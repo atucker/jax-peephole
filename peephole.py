@@ -1,6 +1,6 @@
-from jax.core import Var, JaxprEqn, ClosedJaxpr, Jaxpr
+from jax.core import Var, JaxprEqn, ClosedJaxpr, Jaxpr, eval_jaxpr
 from jax._src import source_info_util
-from jax import lax
+from jax import lax, make_jaxpr
 
 
 class VarSet:
@@ -177,3 +177,27 @@ def maybe_peephole_logsumexp_trick(ir):
     new_eqns += [max_eqn, sub_eqn, exp_eqn, sum_eqn, log_eqn, add_eqn]
 
     return replace_closed_jaxpr_eqns(ir, new_eqns)
+
+
+class PeepholeContext:
+    def __init__(self, fn, transforms=None):
+        # original function
+        self.fn = fn
+        # intermediate representation
+        self.ir = None
+        # transformations to apply
+        self.transforms = transforms or []
+
+    def __call__(self, *args, **kwargs):
+        if self.ir is None:
+            print("JITting")
+            self.ir = make_jaxpr(self.fn)(*args, **kwargs)
+            for transform in self.transforms:
+                self.ir = transform(self.ir) or self.ir
+        else:
+            print("Using ir")
+        return eval_jaxpr(self.ir.jaxpr, self.ir.literals, *args, **kwargs)
+
+
+def peep(fn):
+    return PeepholeContext(fn, [maybe_peephole_logsumexp_trick])
