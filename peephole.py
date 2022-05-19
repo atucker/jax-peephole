@@ -3,7 +3,7 @@ from jax._src import source_info_util
 from jax import lax, make_jaxpr
 import sys
 
-DEBUG = True
+DEBUG = False
 
 
 def debug_message(s):
@@ -62,10 +62,11 @@ class VarContext:
         self.fns = PrimitiveWrapper(self)
 
     def add(self, var, allow_in_set=False):
-        assert var.suffix == ''
-        assert var.count not in self.counts or allow_in_set
-        self.variables.append(var)
-        self.counts.add(var.count)
+        if isinstance(var, Var):
+            assert var.suffix == ''
+            assert var.count not in self.counts or allow_in_set
+            self.variables.append(var)
+            self.counts.add(var.count)
 
     def new(self, aval):
         var = Var(max(self.counts) + 1, '', aval)
@@ -121,12 +122,14 @@ class Eqns:
         for i, eqn in enumerate(self.eqns):
             for var in eqn.outvars:
                 assert var not in self.source
-                self.source[var] = i
+                if isinstance(var, Var):
+                    self.source[var] = i
             for var in eqn.invars:
-                source = self.source[var]
-                if source not in self.influenced:
-                    self.influenced[source] = set()
-                self.influenced[source].add((i, var))
+                if isinstance(var, Var):
+                    source = self.source[var]
+                    if source not in self.influenced:
+                        self.influenced[source] = set()
+                    self.influenced[source].add((i, var))
 
     def eqns_without(self, eqns, stop_vars):
         affected = set(eqns)
