@@ -1,2 +1,1 @@
-Found logsumexp ((3, a:f32[] = log b), (2, a:f32[] = reduce_sum[axes=(0,)] b), (1, a:f32[5] = exp b))
 [DeviceArray(4.4519143, dtype=float32)]
