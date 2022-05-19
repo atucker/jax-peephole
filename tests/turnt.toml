@@ -1,0 +1,1 @@
+command = "PYTHONPATH='$PYTHONPATH:..' python {filename} {args}"
