@@ -3,7 +3,45 @@ from jax._src import source_info_util
 from jax import lax, make_jaxpr
 
 
-class VarSet:
+class PrimitiveWrapper:
+    def __init__(self, var_context):
+        self.var_context = var_context
+        self.primitives = {
+            'reduce_max': lax.reduce_max_p,
+            'sub': lax.sub_p,
+            'add': lax.add_p,
+            'exp': lax.exp_p,
+            'reduce_sum': lax.reduce_sum_p,
+            'log': lax.log_p
+        }
+
+    def _make_call(self, primitive):
+        def fn(*args, out_aval, params=None):
+            if isinstance(args[0], list):
+                args = args[0]
+            invars = []
+            for arg in args:
+                invars += get_vars(arg)
+
+            out_var = self.var_context.new(out_aval)
+            return JaxprEqn(
+                invars=invars,
+                outvars=[out_var],
+                primitive=primitive,
+                params=params or {},
+                source_info=source_info_util.new_source_info(),
+                effects=set()
+            )
+        return fn
+
+    def __getattr__(self, fn):
+        if fn in self.primitives:
+            return self._make_call(self.primitives[fn])
+        else:
+            raise AttributeError()
+
+
+class VarContext:
     def __init__(self, eqns):
         self.variables = []
         self.counts = set()
@@ -12,6 +50,8 @@ class VarSet:
                 self.add(invar, allow_in_set=True)
             for outvar in eqn.outvars:
                 self.add(outvar, allow_in_set=True)
+
+        self.fns = PrimitiveWrapper(self)
 
     def add(self, var, allow_in_set=False):
         assert var.suffix == ''
@@ -23,6 +63,39 @@ class VarSet:
         var = Var(max(self.counts) + 1, '', aval)
         self.add(var)
         return var
+
+
+def replace_closed_jaxpr_eqns(closed_jaxpr, eqns):
+    return ClosedJaxpr(
+        jaxpr=Jaxpr(
+            constvars=closed_jaxpr.jaxpr.constvars,
+            invars=closed_jaxpr.jaxpr.invars,
+            outvars=eqns[-1].outvars,
+            eqns=eqns,
+            effects=closed_jaxpr.jaxpr.effects,
+        ),
+        consts=closed_jaxpr.consts
+    )
+
+
+def replace_eqn_outvars(eqn, outvars):
+    return JaxprEqn(
+        invars=eqn.invars,
+        outvars=outvars,
+        primitive=eqn.primitive,
+        params=eqn.params,
+        effects=eqn.effects,
+        source_info=eqn.source_info
+    )
+
+
+def get_vars(inpt):
+    if isinstance(inpt, JaxprEqn):
+        return inpt.outvars
+    elif isinstance(inpt, Var):
+        return [inpt]
+    else:
+        raise NotImplemented()
 
 
 class Eqns:
@@ -61,59 +134,6 @@ class Eqns:
                         frontier.append(end)
 
         return [eqn for i, eqn in enumerate(self.eqns) if i not in affected], affected
-
-
-def replace_closed_jaxpr_eqns(closed_jaxpr, eqns):
-    return ClosedJaxpr(
-        jaxpr=Jaxpr(
-            constvars=closed_jaxpr.jaxpr.constvars,
-            invars=closed_jaxpr.jaxpr.invars,
-            outvars=eqns[-1].outvars,
-            eqns=eqns,
-            effects=closed_jaxpr.jaxpr.effects,
-        ),
-        consts=closed_jaxpr.consts
-    )
-
-
-def replace_eqn_outvars(eqn, outvars):
-    return JaxprEqn(
-        invars=eqn.invars,
-        outvars=outvars,
-        primitive=eqn.primitive,
-        params=eqn.params,
-        effects=eqn.effects,
-        source_info=eqn.source_info
-    )
-
-
-def get_vars(inpt):
-    if isinstance(inpt, JaxprEqn):
-        return inpt.outvars
-    elif isinstance(inpt, Var):
-        return [inpt]
-    else:
-        raise NotImplemented()
-
-
-def make_eqn_fn(outvar, primitive, params=None):
-    def call(*args):
-        if isinstance(args[0], list):
-            args = args[0]
-        invars = []
-        for arg in args:
-            invars += get_vars(arg)
-
-        return JaxprEqn(
-            invars=invars,
-            outvars=[outvar],
-            primitive=primitive,
-            params=params or {},
-            source_info=source_info_util.new_source_info(),
-            effects=set()
-        )
-
-    return call
 
 
 def matches(eqn_tup, name):
@@ -162,15 +182,15 @@ def maybe_peephole_logsumexp_trick(ir):
         return None
 
     # Fix the variable setting
-    var_set = VarSet(ir.eqns)
+    context = VarContext(ir.eqns)
 
-    max_eqn = make_eqn_fn(var_set.new(squeeze_shape), lax.reduce_max_p, params=sm[1].params)(inpt_vars)
-    sub_eqn = make_eqn_fn(var_set.new(vec_shape), lax.sub_p)(inpt_vars[0], max_eqn)
-    exp_eqn = make_eqn_fn(var_set.new(vec_shape), lax.exp_p)(sub_eqn)
-    sum_eqn = make_eqn_fn(var_set.new(squeeze_shape), lax.reduce_sum_p, params=sm[1].params)(exp_eqn)
-    log_eqn = make_eqn_fn(var_set.new(squeeze_shape), lax.log_p)(sum_eqn)
+    max_eqn = context.fns.reduce_max(inpt_vars, out_aval=squeeze_shape, params=sm[1].params)
+    sub_eqn = context.fns.sub(inpt_vars[0], max_eqn, out_aval=vec_shape)
+    exp_eqn = context.fns.exp(sub_eqn, out_aval=vec_shape)
+    sum_eqn = context.fns.reduce_sum(exp_eqn, out_aval=squeeze_shape, params=sm[1].params)
+    log_eqn = context.fns.log(sum_eqn, out_aval=squeeze_shape)
     add_eqn = replace_eqn_outvars(
-        make_eqn_fn(var_set.new(squeeze_shape), lax.add_p, {})(max_eqn, log_eqn),
+        context.fns.add(max_eqn, log_eqn, out_aval=squeeze_shape),
         output_vars
     )
 
@@ -196,8 +216,8 @@ class PeepholeContext:
                 self.ir = transform(self.ir) or self.ir
         else:
             print("Using ir")
-        return eval_jaxpr(self.ir.jaxpr, self.ir.literals, *args, **kwargs)
+        return eval_jaxpr(self.ir.jaxpr, self.ir.literals, *args)
 
 
-def peep(fn):
+def peephole_improve(fn):
     return PeepholeContext(fn, [maybe_peephole_logsumexp_trick])
