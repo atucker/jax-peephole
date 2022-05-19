@@ -170,7 +170,7 @@ def search_logsumexp(ir):
             if sm and matches(sm, 'reduce_sum'):
                 exp = get_next(vs, sm)
                 if matches(exp, 'exp'):
-                    print(f"Found logsumexp {log, sm, exp}")
+                    debug_message(f"Found logsumexp {log, sm, exp}")
                     return (log, sm, exp), (exp[1].invars, log[1].outvars)
 
 
@@ -234,7 +234,7 @@ class PeepholeContext:
         return eval_jaxpr(self.ir.jaxpr, self.ir.literals, *args)
 
 
-def peephole_improve(fn):
+def improve(fn):
     return PeepholeContext(fn, [
         maybe_peephole_logsumexp_trick
     ])

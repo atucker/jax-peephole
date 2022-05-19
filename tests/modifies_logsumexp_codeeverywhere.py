@@ -4,7 +4,7 @@ import peephole
 import jax.numpy as np
 from jax import make_jaxpr
 
-
+@peephole.improve
 def test(x):
     x = x * 2
     a = np.exp(x)
@@ -14,6 +14,4 @@ def test(x):
     return c + d
 
 
-x = np.array(range(5))
-ir = make_jaxpr(test)(x)
-print(peephole.maybe_peephole_logsumexp_trick(ir))
+print(test(np.array(range(5))) is not None)

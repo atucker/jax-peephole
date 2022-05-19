@@ -11,4 +11,4 @@ def test(x):
 
 x = np.array(range(5))
 ir = make_jaxpr(test)(x)
-print(peephole.maybe_peephole_logsumexp_trick(ir))
+print(peephole.maybe_peephole_logsumexp_trick(ir) is None)
