@@ -1,6 +1,14 @@
 from jax.core import Var, JaxprEqn, ClosedJaxpr, Jaxpr, eval_jaxpr
 from jax._src import source_info_util
 from jax import lax, make_jaxpr
+import sys
+
+DEBUG = True
+
+
+def debug_message(s):
+    if DEBUG:
+        print(s, file=sys.stderr)
 
 
 class PrimitiveWrapper:
@@ -209,15 +217,21 @@ class PeepholeContext:
         self.transforms = transforms or []
 
     def __call__(self, *args, **kwargs):
+        if len(kwargs) > 0:
+            print("Warning, peephole context doesn't handle kwargs yet", file=sys.stderr)
         if self.ir is None:
-            print("JITting")
+            debug_message("JITting")
             self.ir = make_jaxpr(self.fn)(*args, **kwargs)
+            debug_message(f"Starting Jaxpr: {self.ir}")
             for transform in self.transforms:
                 self.ir = transform(self.ir) or self.ir
+                debug_message(f"Transformed Jaxpr: {self.ir}")
         else:
-            print("Using ir")
+            debug_message("Using ir")
         return eval_jaxpr(self.ir.jaxpr, self.ir.literals, *args)
 
 
 def peephole_improve(fn):
-    return PeepholeContext(fn, [maybe_peephole_logsumexp_trick])
+    return PeepholeContext(fn, [
+        maybe_peephole_logsumexp_trick
+    ])
