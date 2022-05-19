@@ -6,11 +6,12 @@ from jax import make_jaxpr
 
 
 def test(x):
+    x = x * 2
     a = np.exp(x)
     d = x * 2 # has to be unrelated to a, b, c
     b = np.sum(a)
     c = np.log(b)
-    return b
+    return c + d
 
 
 x = np.array(range(5))
